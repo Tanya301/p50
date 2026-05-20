@@ -5,730 +5,690 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>p50 — Tetris</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
-  html,body{height:100%;background:#0b0d12;color:#e6e9f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;overflow:hidden}
-  #app{display:flex;align-items:center;justify-content:center;width:100vw;height:100vh;flex-direction:column;gap:14px;padding:10px}
-  #stage{display:flex;flex-direction:row;align-items:flex-start;gap:14px}
-  canvas{background:#000;border:2px solid #1e2536;border-radius:6px;box-shadow:0 8px 28px rgba(0,0,0,.55);display:block;touch-action:none}
-  #touch{display:none;gap:10px}
-  .btn{background:linear-gradient(180deg,#222a3d,#181f2c);color:#dfe6f5;border:1px solid #2c3550;border-radius:10px;font-size:20px;font-weight:600;min-width:64px;min-height:64px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 0 #10141d,0 6px 14px rgba(0,0,0,.4);cursor:pointer;touch-action:manipulation}
-  .btn:active{transform:translateY(2px);box-shadow:0 2px 0 #10141d,0 3px 6px rgba(0,0,0,.4)}
-  .row{display:flex;flex-direction:row;gap:10px}
-  .col{display:flex;flex-direction:column;gap:10px}
-  #touch.portrait{flex-direction:row;justify-content:center;width:100%}
-  #touch.landscape{flex-direction:row}
-  @media (pointer:coarse), (max-width:767px){
-    #touch{display:flex}
-  }
-  .hint{font-size:12px;color:#7d869d;text-align:center;letter-spacing:.5px}
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;background:#0b0d12;color:#dfe7f5;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+  #app{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;padding:10px}
+  #stage{display:flex;gap:10px;align-items:flex-start;flex-wrap:nowrap}
+  canvas{background:#05070b;display:block;border:1px solid #1c2330;border-radius:4px;image-rendering:pixelated}
+  #touch{display:none;gap:8px;width:100%;justify-content:center;flex-wrap:nowrap}
+  #touch button{flex:1;min-width:60px;max-width:120px;height:60px;font-size:22px;background:#1a2030;color:#dfe7f5;border:1px solid #2a3447;border-radius:8px;font-family:inherit}
+  #touch button:active{background:#2a3447}
+  body.touch #touch{display:flex}
+  body.landscape #touch{display:grid;grid-template-columns:repeat(2,minmax(64px,90px));grid-auto-rows:60px;width:auto}
+  body.landscape #stage{flex-direction:row}
+  .hint{font-size:11px;color:#7a8aa6;text-align:center;max-width:90vw}
 </style>
 </head>
 <body>
 <div id="app">
   <div id="stage">
-    <canvas id="game"></canvas>
+    <canvas id="c"></canvas>
   </div>
-  <div id="touch" class="portrait">
-    <button class="btn" data-act="left" aria-label="left">◀</button>
-    <button class="btn" data-act="rotate" aria-label="rotate">⟳</button>
-    <button class="btn" data-act="drop" aria-label="hard drop">⤓</button>
-    <button class="btn" data-act="right" aria-label="right">▶</button>
+  <div id="touch">
+    <button id="bL" aria-label="left">&larr;</button>
+    <button id="bR_rot" aria-label="rotate">&#8635;</button>
+    <button id="bD" aria-label="drop">&darr;</button>
+    <button id="bR" aria-label="right">&rarr;</button>
   </div>
-  <div class="hint">← → move · ↑ rotate · ↓ soft · Space hard · P pause · R restart</div>
+  <div class="hint">&larr; &rarr; move &middot; &uarr; rotate &middot; &darr; soft drop &middot; Space hard drop &middot; P pause &middot; R restart</div>
 </div>
 <script>
 (() => {
-"use strict";
+'use strict';
 
-// ---------- Constants ----------
+// ---------- constants ----------
 const COLS = 10, ROWS = 20;
-const LOGIC_HZ = 60, STEP_MS = 1000/LOGIC_HZ;
+const LOGIC_HZ = 60, STEP_MS = 1000 / LOGIC_HZ;
 const DAS_MS = 170, ARR_MS = 50;
-const SOFT_DROP_TICKS = 2;
-const KINDS = ["I","O","T","S","Z","J","L"];
-const COLORS = {I:"#46d6ff",O:"#ffd62e",T:"#c160ff",S:"#5dec7a",Z:"#ff5a6e",J:"#5a8bff",L:"#ffa14a",X:"#3b455e"};
+const SOFT_DROP_TICKS = 2; // 1 cell per 2 ticks ~ 30Hz
+const COLORS = {
+  I:'#3ad1ff', O:'#ffd23a', T:'#c673ff', S:'#5dd45d',
+  Z:'#ff5d6c', J:'#5a86ff', L:'#ff9d3a', '#':'#222a3a'
+};
 
-// Rotation tables: 4x4 masks per rotation (bit grid)
-// Use lists of [x,y] offsets relative to a 4x4 bounding box
-function buildShapes(){
-  // base shapes (rotation 0) inside 4x4 boxes
-  const base = {
-    I:[[0,1],[1,1],[2,1],[3,1]],
-    O:[[1,0],[2,0],[1,1],[2,1]],
-    T:[[1,0],[0,1],[1,1],[2,1]],
-    S:[[1,0],[2,0],[0,1],[1,1]],
-    Z:[[0,0],[1,0],[1,1],[2,1]],
-    J:[[0,0],[0,1],[1,1],[2,1]],
-    L:[[2,0],[0,1],[1,1],[2,1]],
-  };
-  const rot = (cells, kind) => {
-    // I-piece rotates in a 4x4 box; others in a 3x3 box centered at (1,1)
-    if (kind === "O") return cells.slice();
-    if (kind === "I"){
-      // rotate around center (1.5,1.5) in 4x4
-      return cells.map(([x,y]) => [3-y, x]);
-    }
-    // rotate around (1,1) in 3x3
-    return cells.map(([x,y]) => [1 - (y-1), 1 + (x-1)]);
-  };
-  const out = {};
-  for (const k of KINDS){
-    const s = [base[k]];
-    for (let i=1;i<4;i++) s.push(rot(s[i-1], k));
-    out[k] = s;
+// rotation tables (4 states each), each is 4x4 mask of [r,c]
+const SHAPES = {
+  I: [
+    [[0,0],[0,1],[0,2],[0,3]],
+    [[0,2],[1,2],[2,2],[3,2]],
+    [[1,0],[1,1],[1,2],[1,3]],
+    [[0,1],[1,1],[2,1],[3,1]]
+  ],
+  O: [
+    [[0,1],[0,2],[1,1],[1,2]],
+    [[0,1],[0,2],[1,1],[1,2]],
+    [[0,1],[0,2],[1,1],[1,2]],
+    [[0,1],[0,2],[1,1],[1,2]]
+  ],
+  T: [
+    [[0,1],[1,0],[1,1],[1,2]],
+    [[0,1],[1,1],[1,2],[2,1]],
+    [[1,0],[1,1],[1,2],[2,1]],
+    [[0,1],[1,0],[1,1],[2,1]]
+  ],
+  S: [
+    [[0,1],[0,2],[1,0],[1,1]],
+    [[0,1],[1,1],[1,2],[2,2]],
+    [[1,1],[1,2],[2,0],[2,1]],
+    [[0,0],[1,0],[1,1],[2,1]]
+  ],
+  Z: [
+    [[0,0],[0,1],[1,1],[1,2]],
+    [[0,2],[1,1],[1,2],[2,1]],
+    [[1,0],[1,1],[2,1],[2,2]],
+    [[0,1],[1,0],[1,1],[2,0]]
+  ],
+  J: [
+    [[0,0],[1,0],[1,1],[1,2]],
+    [[0,1],[0,2],[1,1],[2,1]],
+    [[1,0],[1,1],[1,2],[2,2]],
+    [[0,1],[1,1],[2,0],[2,1]]
+  ],
+  L: [
+    [[0,2],[1,0],[1,1],[1,2]],
+    [[0,1],[1,1],[2,1],[2,2]],
+    [[1,0],[1,1],[1,2],[2,0]],
+    [[0,0],[0,1],[1,1],[2,1]]
+  ]
+};
+
+const KINDS = ['I','O','T','S','Z','J','L'];
+
+function gravityPeriod(level){ return Math.max(1, 48 - level*5); }
+
+// ---------- bag ----------
+function newBag(){
+  const b = KINDS.slice();
+  for (let i=b.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [b[i],b[j]]=[b[j],b[i]];
   }
-  return out;
-}
-const SHAPES = buildShapes();
-
-// ---------- 7-bag RNG ----------
-function makeBag(){
-  let bag = [];
-  return () => {
-    if (bag.length === 0){
-      bag = KINDS.slice();
-      for (let i=bag.length-1;i>0;i--){
-        const j = Math.floor(Math.random()*(i+1));
-        [bag[i],bag[j]] = [bag[j],bag[i]];
-      }
-    }
-    return bag.shift();
-  };
-}
-
-// ---------- State ----------
-function emptyBoard(){
-  const b = new Array(ROWS);
-  for (let y=0;y<ROWS;y++){ b[y] = new Array(COLS).fill(null); }
   return b;
 }
-function spawnPiece(kind){
-  // spawn near top center
-  return { kind, rotation:0, x: 3, y: kind==="I" ? -1 : -1 };
+
+// ---------- board helpers ----------
+function emptyBoard(){
+  const b = new Array(ROWS);
+  for (let r=0;r<ROWS;r++){ b[r] = new Array(COLS).fill(null); }
+  return b;
 }
-function gravityPeriod(level){ return Math.max(1, 48 - level*5); }
 function pieceCells(p){
-  return SHAPES[p.kind][p.rotation].map(([dx,dy]) => [p.x + dx, p.y + dy]);
+  const s = SHAPES[p.kind][p.rotation];
+  const out = [];
+  for (const [dr,dc] of s) out.push([p.y+dr, p.x+dc]);
+  return out;
 }
 function canPlace(board, p){
-  for (const [x,y] of pieceCells(p)){
-    if (x < 0 || x >= COLS || y >= ROWS) return false;
-    if (y >= 0 && board[y][x]) return false;
+  for (const [r,c] of pieceCells(p)){
+    if (c<0||c>=COLS||r>=ROWS) return false;
+    if (r>=0 && board[r][c]) return false;
   }
   return true;
 }
 function lockPiece(board, p){
-  for (const [x,y] of pieceCells(p)){
-    if (y >= 0 && y < ROWS && x >= 0 && x < COLS){
-      board[y][x] = p.kind;
-    }
+  for (const [r,c] of pieceCells(p)){
+    if (r>=0 && r<ROWS && c>=0 && c<COLS) board[r][c] = p.kind;
   }
 }
 function clearLines(board){
   let count = 0;
-  for (let y=ROWS-1;y>=0;y--){
-    let full = true;
-    for (let x=0;x<COLS;x++){ if (!board[y][x]){ full=false; break; } }
-    if (full){
-      board.splice(y,1);
+  for (let r=ROWS-1;r>=0;){
+    if (board[r].every(c=>c!==null)){
+      board.splice(r,1);
       board.unshift(new Array(COLS).fill(null));
       count++;
-      y++;
-    }
+    } else r--;
   }
   return count;
 }
-function scoreForLines(n, level){
-  return [0,40,100,300,1200][n] * (level + 1);
+function spawnPiece(kind){
+  // spawn near top-center; small offset so wide I sits nicely
+  return { kind, rotation:0, x: (kind==='O'?4:3), y: -1 };
 }
 
-// ---------- Audio ----------
-let audioCtx = null;
-function ensureAudio(){
-  if (audioCtx) return;
-  try {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  } catch(e){ audioCtx = null; }
-}
-function tone(freq, dur, type="square", gain=0.06){
-  if (!audioCtx) return;
-  const o = audioCtx.createOscillator();
-  const g = audioCtx.createGain();
-  o.type = type; o.frequency.value = freq;
-  g.gain.value = gain;
-  o.connect(g); g.connect(audioCtx.destination);
-  const t = audioCtx.currentTime;
-  g.gain.setValueAtTime(gain, t);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.start(t); o.stop(t + dur + 0.02);
-}
-function playSfx(event){
-  ensureAudio();
-  if (!audioCtx) return;
-  if (event === "lock"){ tone(110, 0.08, "square", 0.05); }
-  else if (event === "clear"){ tone(660, 0.12, "triangle", 0.07); tone(880, 0.12, "triangle", 0.05); }
-  else if (event === "tetris"){
-    tone(523, 0.1, "square", 0.08);
-    setTimeout(()=>tone(659,0.1,"square",0.08),60);
-    setTimeout(()=>tone(784,0.1,"square",0.08),120);
-    setTimeout(()=>tone(1046,0.2,"square",0.08),180);
+// ---------- input controller ----------
+const InputCtl = (() => {
+  const queue = [];
+  // held key state for DAS/ARR
+  let leftDown=false, rightDown=false, softDown=false;
+  let dasDir=0, dasTimer=0, arrTimer=0;
+  // touch held tracking (not used for DAS but cleared on lift)
+  const heldTouches = new Set();
+
+  function push(intent){ queue.push(intent); }
+
+  function onKeyDown(e){
+    if (e.repeat) return;
+    switch(e.code){
+      case 'ArrowLeft':
+        if (!leftDown){ leftDown=true; push('MoveLeft'); dasDir=-1; dasTimer=DAS_MS; arrTimer=0; }
+        e.preventDefault(); break;
+      case 'ArrowRight':
+        if (!rightDown){ rightDown=true; push('MoveRight'); dasDir=1; dasTimer=DAS_MS; arrTimer=0; }
+        e.preventDefault(); break;
+      case 'ArrowUp': case 'KeyX': push('RotateCW'); e.preventDefault(); break;
+      case 'ArrowDown':
+        softDown=true; push('SoftDropOn'); e.preventDefault(); break;
+      case 'Space':
+        push('HardDrop'); e.preventDefault(); break;
+      case 'KeyP':
+        push('Pause'); e.preventDefault(); break;
+      case 'KeyR':
+        push('Restart'); e.preventDefault(); break;
+      default:
+        push('Any'); break;
+    }
   }
-  else if (event === "gameover"){
-    tone(330, 0.15, "sawtooth", 0.07);
-    setTimeout(()=>tone(247,0.18,"sawtooth",0.07),140);
-    setTimeout(()=>tone(196,0.3,"sawtooth",0.07),320);
+  function onKeyUp(e){
+    switch(e.code){
+      case 'ArrowLeft':
+        leftDown=false;
+        if (dasDir===-1){ dasDir = rightDown?1:0; dasTimer=rightDown?DAS_MS:0; arrTimer=0; }
+        break;
+      case 'ArrowRight':
+        rightDown=false;
+        if (dasDir===1){ dasDir = leftDown?-1:0; dasTimer=leftDown?DAS_MS:0; arrTimer=0; }
+        break;
+      case 'ArrowDown':
+        softDown=false; push('SoftDropOff'); break;
+    }
   }
-}
+  function tick(dtMs){
+    if (dasDir!==0){
+      if (dasTimer>0){
+        dasTimer -= dtMs;
+        if (dasTimer<=0){ arrTimer = 0; }
+      } else {
+        arrTimer -= dtMs;
+        if (arrTimer<=0){
+          push(dasDir===-1 ? 'MoveLeft' : 'MoveRight');
+          arrTimer += ARR_MS;
+        }
+      }
+    }
+  }
+  function drain(){ const q = queue.slice(); queue.length=0; return q; }
+  function reset(){
+    queue.length=0;
+    leftDown=rightDown=softDown=false;
+    dasDir=0; dasTimer=0; arrTimer=0;
+    heldTouches.clear();
+  }
+  function softHeld(){ return softDown; }
 
-// ---------- Persistence ----------
-function readBest(){
-  try {
-    const v = localStorage.getItem("p50.bestScore");
-    if (v == null) return null;
-    const n = parseInt(v, 10);
-    if (!Number.isFinite(n) || n < 0 || String(n) !== v.trim()) return null;
-    return n;
-  } catch(e){ return null; }
-}
-function writeBest(score){
-  try {
-    const cur = readBest();
-    if (cur == null || score > cur) localStorage.setItem("p50.bestScore", String(score));
-  } catch(e){}
-}
+  return { onKeyDown, onKeyUp, tick, drain, reset, push, softHeld };
+})();
 
-// ---------- Game ----------
-const nextPiece = makeBag();
-const state = {
-  board: emptyBoard(),
-  active: null,
-  nextKind: null,
-  score: 0,
-  lines: 0,
-  level: 0,
-  status: "title", // 'title' | 'playing' | 'paused' | 'gameover'
-  gravityTicks: 48,
-  gravityCounter: 0,
-  softDropCounter: 0,
-  best: readBest(),
-  flash: 0, // ticks remaining for line-clear flash
-  flashRows: [],
-};
+// ---------- audio ----------
+const Audio = (() => {
+  let ctx=null;
+  function ensure(){
+    if (!ctx){
+      try { ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch(e){ ctx=null; }
+    }
+    if (ctx && ctx.state==='suspended') ctx.resume().catch(()=>{});
+  }
+  function tone(freq, dur, type='square', vol=0.06){
+    if (!ctx) return;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.value = vol;
+    g.gain.setValueAtTime(vol, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime + dur);
+  }
+  function play(evt){
+    ensure();
+    if (!ctx) return;
+    switch(evt){
+      case 'lock': tone(140, 0.05, 'square', 0.05); break;
+      case 'clear': tone(660, 0.08, 'triangle', 0.08); setTimeout(()=>tone(880,0.1,'triangle',0.08),60); break;
+      case 'tetris':
+        tone(523, 0.08, 'square', 0.09);
+        setTimeout(()=>tone(659,0.08,'square',0.09),60);
+        setTimeout(()=>tone(784,0.08,'square',0.09),120);
+        setTimeout(()=>tone(1047,0.18,'square',0.09),180);
+        break;
+      case 'gameover':
+        tone(330,0.2,'sawtooth',0.07);
+        setTimeout(()=>tone(247,0.25,'sawtooth',0.07),200);
+        setTimeout(()=>tone(165,0.4,'sawtooth',0.07),450);
+        break;
+      case 'move': tone(220,0.015,'square',0.02); break;
+    }
+  }
+  return { play, ensure };
+})();
 
-function startNewGame(){
+// ---------- persistence ----------
+const Storage = (() => {
+  const KEY = 'p50.bestScore';
+  function readBest(){
+    try {
+      const v = localStorage.getItem(KEY);
+      if (v===null) return null;
+      const n = parseInt(v, 10);
+      if (!Number.isFinite(n) || n < 0 || String(n) !== v.trim()) return null;
+      return n;
+    } catch(e){ return null; }
+  }
+  function writeBest(score){
+    try {
+      const cur = readBest();
+      if (cur===null || score > cur) localStorage.setItem(KEY, String(score));
+    } catch(e){}
+  }
+  return { readBest, writeBest };
+})();
+
+// ---------- game state ----------
+function newGame(){
+  return {
+    board: emptyBoard(),
+    active: null,
+    next: null,
+    bag: [],
+    score: 0,
+    lines: 0,
+    level: 0,
+    status: 'title', // title | playing | paused | gameover
+    gravityTicks: gravityPeriod(0),
+    gravityCounter: 0,
+    softCounter: 0,
+    clearFlash: 0,
+    clearRows: [],
+    best: Storage.readBest()
+  };
+}
+function nextFromBag(state){
+  if (state.bag.length===0) state.bag = newBag();
+  return state.bag.shift();
+}
+function startGame(state){
   state.board = emptyBoard();
-  state.score = 0;
-  state.lines = 0;
-  state.level = 0;
+  state.score = 0; state.lines = 0; state.level = 0;
   state.gravityTicks = gravityPeriod(0);
+  state.gravityCounter = 0; state.softCounter = 0;
+  state.bag = newBag();
+  state.next = nextFromBag(state);
+  spawnNext(state);
+  state.status = 'playing';
+}
+function spawnNext(state){
+  state.active = spawnPiece(state.next);
+  state.next = nextFromBag(state);
   state.gravityCounter = 0;
-  state.softDropCounter = 0;
-  state.nextKind = nextPiece();
-  state.active = spawnPiece(state.nextKind);
-  state.nextKind = nextPiece();
-  state.status = "playing";
-  state.flash = 0;
-  state.flashRows = [];
-}
-
-function spawnNext(){
-  state.active = spawnPiece(state.nextKind);
-  state.nextKind = nextPiece();
+  state.softCounter = 0;
+  // block-out detection
   if (!canPlace(state.board, state.active)){
-    state.status = "gameover";
-    playSfx("gameover");
-    if (state.score > 0) writeBest(state.score);
-    state.best = readBest();
+    state.status = 'gameover';
+    Storage.writeBest(state.score);
+    state.best = Storage.readBest();
+    Audio.play('gameover');
   }
 }
-
-function tryMove(dx, dy){
+function tryMove(state, dx, dy){
   const p = state.active;
-  if (!p) return false;
-  const cand = { kind:p.kind, rotation:p.rotation, x:p.x+dx, y:p.y+dy };
-  if (canPlace(state.board, cand)){
-    state.active = cand;
+  const np = {...p, x:p.x+dx, y:p.y+dy};
+  if (canPlace(state.board, np)){
+    state.active = np;
     return true;
   }
   return false;
 }
-function tryRotate(){
+function tryRotate(state){
   const p = state.active;
-  if (!p) return false;
-  const cand = { kind:p.kind, rotation:(p.rotation+1)%4, x:p.x, y:p.y };
-  if (canPlace(state.board, cand)){
-    state.active = cand;
+  const np = {...p, rotation:(p.rotation+1)%4};
+  if (canPlace(state.board, np)){
+    state.active = np;
     return true;
   }
   return false;
 }
-function hardDrop(){
-  let d = 0;
-  while (tryMove(0,1)) d++;
-  state.score += 2*d;
-  lockAndAdvance();
+function hardDrop(state){
+  let dist = 0;
+  while (true){
+    const np = {...state.active, y: state.active.y+1};
+    if (canPlace(state.board, np)){ state.active = np; dist++; }
+    else break;
+  }
+  state.score += 2*dist;
+  lockAndClear(state);
 }
-function lockAndAdvance(){
+function lockAndClear(state){
   lockPiece(state.board, state.active);
-  playSfx("lock");
-  // detect filled rows for flash
-  const filled = [];
-  for (let y=0;y<ROWS;y++){
-    let full=true;
-    for (let x=0;x<COLS;x++){ if (!state.board[y][x]){ full=false; break; } }
-    if (full) filled.push(y);
-  }
-  if (filled.length){
-    const n = clearLines(state.board);
-    state.score += scoreForLines(n, state.level);
-    state.lines += n;
+  const cleared = clearLines(state.board);
+  if (cleared > 0){
+    const mult = [0,40,100,300,1200][cleared] || 0;
+    state.score += mult * (state.level + 1);
+    state.lines += cleared;
     const newLevel = Math.floor(state.lines / 10);
     if (newLevel !== state.level){
       state.level = newLevel;
       state.gravityTicks = gravityPeriod(state.level);
     }
-    state.flash = 10;
-    state.flashRows = filled.slice();
-    if (n === 4) playSfx("tetris"); else playSfx("clear");
-  }
-  state.gravityCounter = 0;
-  state.softDropCounter = 0;
-  state.active = null; // spawn on next tick
-}
-
-function step(intents){
-  if (state.status !== "playing") return;
-  // process intents
-  let softDropHeld = false;
-  for (const ev of intents){
-    if (ev === "MoveLeft") tryMove(-1,0);
-    else if (ev === "MoveRight") tryMove(1,0);
-    else if (ev === "RotateCW") tryRotate();
-    else if (ev === "HardDrop"){ if (state.active) hardDrop(); }
-    else if (ev === "SoftDropHeld") softDropHeld = true;
-  }
-  if (state.flash > 0){ state.flash--; return; }
-  if (!state.active){ spawnNext(); return; }
-
-  // gravity
-  state.gravityCounter++;
-  let gravityFired = false;
-  if (state.gravityCounter >= state.gravityTicks){
-    state.gravityCounter = 0;
-    if (!tryMove(0,1)){
-      lockAndAdvance();
-      return;
-    } else {
-      gravityFired = true;
-    }
-  }
-  // soft drop
-  if (softDropHeld){
-    state.softDropCounter++;
-    if (state.softDropCounter >= SOFT_DROP_TICKS){
-      state.softDropCounter = 0;
-      // only soft-drop if natural gravity didn't already move this tick
-      if (!gravityFired){
-        if (tryMove(0,1)){
-          state.score += 1;
-        } else {
-          lockAndAdvance();
-        }
-      }
-    }
+    if (cleared === 4) Audio.play('tetris');
+    else Audio.play('clear');
   } else {
-    state.softDropCounter = 0;
+    Audio.play('lock');
   }
+  state.active = null;
 }
 
-// ---------- Input ----------
-const input = (() => {
-  const queue = [];
-  const held = {}; // key -> {dasStart, lastRepeat, intent}
-  const KEY_TO_INTENT = {
-    "ArrowLeft": "MoveLeft",
-    "ArrowRight": "MoveRight",
-  };
-  function fireMove(intent){ queue.push(intent); }
-  function reset(){
-    for (const k in held) delete held[k];
+// ---------- step ----------
+function step(state, intents){
+  // handle title / gameover transitions
+  if (state.status === 'title'){
+    if (intents.length > 0){
+      const i0 = intents[0];
+      if (i0 === 'Pause') return; // P does nothing on title
+      startGame(state);
+    }
+    return;
   }
-  function drain(){
-    const out = queue.slice();
-    queue.length = 0;
-    return out;
+  if (state.status === 'gameover'){
+    for (const it of intents){
+      if (it === 'Restart'){ startGame(state); return; }
+    }
+    return;
   }
-  function tickHeldKeys(now){
-    for (const k in held){
-      const h = held[k];
-      if (!h.dasFired){
-        if (now - h.downAt >= DAS_MS){
-          h.dasFired = true;
-          h.lastRepeat = now;
-          fireMove(h.intent);
-        }
-      } else {
-        while (now - h.lastRepeat >= ARR_MS){
-          h.lastRepeat += ARR_MS;
-          fireMove(h.intent);
+  if (state.status === 'paused'){
+    for (const it of intents){
+      if (it === 'Pause'){ state.status = 'playing'; InputCtl.reset(); return; }
+      if (it === 'Restart'){ state.status = 'title'; InputCtl.reset(); return; }
+    }
+    return;
+  }
+  // playing
+  let softOn = InputCtl.softHeld();
+  for (const it of intents){
+    if (it === 'Pause'){ state.status = 'paused'; InputCtl.reset(); return; }
+    if (it === 'Restart'){ /* ignored while playing */ continue; }
+    if (state.active === null){ continue; }
+    if (it === 'MoveLeft'){ tryMove(state, -1, 0); }
+    else if (it === 'MoveRight'){ tryMove(state, 1, 0); }
+    else if (it === 'RotateCW'){ tryRotate(state); }
+    else if (it === 'HardDrop'){
+      hardDrop(state);
+      if (state.status === 'playing') spawnNext(state);
+      return;
+    }
+    else if (it === 'SoftDropOn'){ softOn = true; }
+    else if (it === 'SoftDropOff'){ softOn = false; }
+  }
+  // gravity / soft drop
+  if (state.active){
+    state.gravityCounter++;
+    let moved = false;
+    if (state.gravityCounter >= state.gravityTicks){
+      state.gravityCounter = 0;
+      const ok = tryMove(state, 0, 1);
+      moved = ok;
+      if (!ok){
+        lockAndClear(state);
+        if (state.status === 'playing') spawnNext(state);
+        return;
+      }
+    }
+    if (softOn && state.active){
+      state.softCounter++;
+      if (state.softCounter >= SOFT_DROP_TICKS){
+        state.softCounter = 0;
+        if (state.gravityTicks >= SOFT_DROP_TICKS){
+          const ok = tryMove(state, 0, 1);
+          if (ok){ state.score += 1; }
+          else {
+            lockAndClear(state);
+            if (state.status === 'playing') spawnNext(state);
+            return;
+          }
         }
       }
     }
   }
-  function isSoftDropHeld(){
-    return !!held["ArrowDown"];
-  }
-  function softDropDown(){ /* tracked via held */ }
-  function keydown(e){
-    const k = e.key;
-    if (state.status === "title"){
-      // any key starts
-      e.preventDefault();
-      startNewGame();
-      return;
-    }
-    if (state.status === "gameover"){
-      if (k === "r" || k === "R"){ e.preventDefault(); startNewGame(); }
-      return;
-    }
-    if (state.status === "paused"){
-      if (k === "p" || k === "P"){ e.preventDefault(); state.status = "playing"; reset(); }
-      else if (k === "r" || k === "R"){ e.preventDefault(); state.status = "title"; reset(); }
-      return;
-    }
-    // playing
-    if (k === "p" || k === "P"){
-      e.preventDefault();
-      state.status = "paused";
-      reset();
-      queue.length = 0;
-      return;
-    }
-    if (k === "ArrowLeft" || k === "ArrowRight"){
-      e.preventDefault();
-      if (!held[k]){
-        const intent = KEY_TO_INTENT[k];
-        held[k] = { downAt: performance.now(), lastRepeat: 0, dasFired:false, intent };
-        fireMove(intent);
-      }
-      return;
-    }
-    if (k === "ArrowUp" || k === "x" || k === "X"){
-      e.preventDefault();
-      if (!e.repeat) queue.push("RotateCW");
-      return;
-    }
-    if (k === "ArrowDown"){
-      e.preventDefault();
-      held["ArrowDown"] = { downAt: performance.now() };
-      return;
-    }
-    if (k === " " || k === "Spacebar"){
-      e.preventDefault();
-      if (!e.repeat) queue.push("HardDrop");
-      return;
-    }
-  }
-  function keyup(e){
-    const k = e.key;
-    if (held[k]) delete held[k];
-  }
-  return { keydown, keyup, drain, tickHeldKeys, isSoftDropHeld, reset, queue };
-})();
-
-window.addEventListener("keydown", input.keydown, { passive:false });
-window.addEventListener("keyup", input.keyup, { passive:false });
-
-// Touch controls
-function setupTouch(){
-  const buttons = document.querySelectorAll("#touch .btn");
-  buttons.forEach(btn => {
-    const act = btn.dataset.act;
-    const fire = (e) => {
-      e.preventDefault();
-      ensureAudio();
-      if (state.status === "title"){ startNewGame(); return; }
-      if (state.status === "gameover"){ startNewGame(); return; }
-      if (state.status === "paused"){ return; }
-      if (act === "left") input.queue.push("MoveLeft");
-      else if (act === "right") input.queue.push("MoveRight");
-      else if (act === "rotate") input.queue.push("RotateCW");
-      else if (act === "drop") input.queue.push("HardDrop");
-    };
-    btn.addEventListener("touchstart", fire, { passive:false });
-    btn.addEventListener("mousedown", fire);
-  });
 }
-setupTouch();
 
-// Also: clicking on the canvas starts/restarts (for desktop title click)
-const canvas = document.getElementById("game");
-canvas.addEventListener("pointerdown", (e) => {
-  ensureAudio();
-  if (state.status === "title") startNewGame();
-  else if (state.status === "gameover") startNewGame();
-});
+// ---------- renderer ----------
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let cellPx = 30;
+let hudW = 130; // hud width in CSS px
+let dpr = window.devicePixelRatio || 1;
+let boardOffsetX = 0;
 
-// ---------- Sizing ----------
-let cellPx = 30, hudWidth = 160, layoutMode = "desktop";
 function computeLayout(){
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const touch = document.getElementById("touch");
-  let mode;
-  // determine cellPx
-  if (vw >= 768 && vh >= 600){
-    cellPx = 30; mode = "desktop";
-  } else if (vw < 768){
-    cellPx = Math.max(14, Math.floor(vw / 12));
-    mode = "portrait";
-  } else {
-    // vw>=768 and vh<600
-    cellPx = Math.max(12, Math.floor(vh / 22));
-    mode = "landscape";
-  }
-  hudWidth = Math.round(cellPx * 5);
-  // touch button layout
-  touch.classList.remove("portrait","landscape");
-  if (mode === "landscape") touch.classList.add("landscape");
-  else touch.classList.add("portrait");
-  layoutMode = mode;
+  const w = window.innerWidth, h = window.innerHeight;
+  document.body.classList.toggle('touch', matchMedia('(pointer: coarse)').matches || w < 768);
+  const landscape = w >= h;
+  document.body.classList.toggle('landscape', landscape && (matchMedia('(pointer: coarse)').matches && w < 1024 || (w >= 768 && h < 600)));
+  if (w >= 768 && h >= 600){ cellPx = 30; }
+  else if (w < 768){ cellPx = Math.max(12, Math.floor(w / 12)); }
+  else { cellPx = Math.max(12, Math.floor(h / 22)); }
+  hudW = Math.max(110, Math.floor(cellPx * 4.2));
+  const cssW = COLS*cellPx + hudW + 8;
+  const cssH = ROWS*cellPx;
+  canvas.style.width = cssW + 'px';
+  canvas.style.height = cssH + 'px';
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  boardOffsetX = 0;
 }
-function resizeCanvas(){
-  computeLayout();
-  // HUD position: portrait => above, else right
-  const portraitHud = (layoutMode === "portrait" && window.innerWidth < 480);
-  // We'll always draw HUD to the right for simplicity unless very narrow.
-  const cssW = COLS*cellPx + (portraitHud ? 0 : hudWidth) + 4;
-  const cssH = ROWS*cellPx + (portraitHud ? Math.round(cellPx*4) : 0) + 4;
-  const dpr = window.devicePixelRatio || 1;
-  canvas.style.width = cssW + "px";
-  canvas.style.height = cssH + "px";
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(1,0,0,1,0,0);
-  ctx.scale(dpr, dpr);
-  canvas._cssW = cssW; canvas._cssH = cssH; canvas._portraitHud = portraitHud;
-}
-window.addEventListener("resize", () => {
-  if (state.status === "playing") state.status = "paused";
-  resizeCanvas();
-});
-window.addEventListener("orientationchange", () => {
-  if (state.status === "playing") state.status = "paused";
-  resizeCanvas();
-});
 
-// ---------- Rendering ----------
-function drawCell(ctx, px, py, color, size){
+function drawCell(x,y,color){
   ctx.fillStyle = color;
-  ctx.fillRect(px, py, size, size);
-  // inner highlight
-  ctx.fillStyle = "rgba(255,255,255,0.18)";
-  ctx.fillRect(px, py, size, Math.max(2, size*0.15));
-  ctx.fillStyle = "rgba(0,0,0,0.25)";
-  ctx.fillRect(px, py + size - Math.max(2, size*0.15), size, Math.max(2, size*0.15));
-  // border
-  ctx.strokeStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(x, y, cellPx, cellPx);
+  ctx.fillStyle = 'rgba(255,255,255,0.16)';
+  ctx.fillRect(x, y, cellPx, 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.30)';
+  ctx.fillRect(x, y+cellPx-2, cellPx, 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.fillRect(x+cellPx-2, y, 2, cellPx);
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
   ctx.lineWidth = 1;
-  ctx.strokeRect(px+0.5, py+0.5, size-1, size-1);
+  ctx.strokeRect(x+0.5, y+0.5, cellPx-1, cellPx-1);
 }
 
-function render(){
-  const ctx = canvas.getContext("2d");
-  const W = canvas._cssW, H = canvas._cssH;
-  const portraitHud = canvas._portraitHud;
-  ctx.fillStyle = "#0b0d12";
-  ctx.fillRect(0,0,W,H);
-
-  // board origin
-  const boardX = 2;
-  const boardY = portraitHud ? Math.round(cellPx*4) + 2 : 2;
-
-  // playfield background
-  ctx.fillStyle = "#06080d";
-  ctx.fillRect(boardX, boardY, COLS*cellPx, ROWS*cellPx);
-
-  // subtle grid
-  ctx.strokeStyle = "rgba(255,255,255,0.04)";
+function drawBoard(state){
+  // background
+  ctx.fillStyle = '#05070b';
+  ctx.fillRect(0,0, COLS*cellPx, ROWS*cellPx);
+  // grid
+  ctx.strokeStyle = '#0f1422';
   ctx.lineWidth = 1;
-  for (let x=1;x<COLS;x++){
-    ctx.beginPath();
-    ctx.moveTo(boardX + x*cellPx + 0.5, boardY);
-    ctx.lineTo(boardX + x*cellPx + 0.5, boardY + ROWS*cellPx);
-    ctx.stroke();
+  for (let i=1;i<COLS;i++){
+    ctx.beginPath(); ctx.moveTo(i*cellPx+0.5, 0); ctx.lineTo(i*cellPx+0.5, ROWS*cellPx); ctx.stroke();
   }
-  for (let y=1;y<ROWS;y++){
-    ctx.beginPath();
-    ctx.moveTo(boardX, boardY + y*cellPx + 0.5);
-    ctx.lineTo(boardX + COLS*cellPx, boardY + y*cellPx + 0.5);
-    ctx.stroke();
+  for (let j=1;j<ROWS;j++){
+    ctx.beginPath(); ctx.moveTo(0, j*cellPx+0.5); ctx.lineTo(COLS*cellPx, j*cellPx+0.5); ctx.stroke();
   }
-
   // locked cells
-  for (let y=0;y<ROWS;y++){
-    for (let x=0;x<COLS;x++){
-      const v = state.board[y][x];
-      if (v){
-        drawCell(ctx, boardX + x*cellPx, boardY + y*cellPx, COLORS[v], cellPx);
-      }
+  for (let r=0;r<ROWS;r++){
+    for (let c=0;c<COLS;c++){
+      const k = state.board[r][c];
+      if (k) drawCell(c*cellPx, r*cellPx, COLORS[k]);
     }
   }
-
-  // flash for cleared rows
-  if (state.flash > 0 && state.flashRows.length){
-    const alpha = state.flash / 10;
-    ctx.fillStyle = `rgba(255,255,255,${0.3*alpha + 0.2})`;
-    for (const y of state.flashRows){
-      ctx.fillRect(boardX, boardY + y*cellPx, COLS*cellPx, cellPx);
-    }
-  }
-
-  // ghost piece + active piece
-  if (state.active && state.status === "playing" && state.flash === 0){
+  // active piece + ghost
+  if (state.active){
     // ghost
-    let ghostY = state.active.y;
-    const g = { ...state.active };
-    while (true){
-      const c = { ...g, y: g.y + 1 };
-      if (canPlace(state.board, c)){ g.y = c.y; } else break;
-    }
-    for (const [x,y] of pieceCells(g)){
-      if (y >= 0){
-        ctx.fillStyle = "rgba(255,255,255,0.08)";
-        ctx.fillRect(boardX + x*cellPx, boardY + y*cellPx, cellPx, cellPx);
-        ctx.strokeStyle = "rgba(255,255,255,0.25)";
-        ctx.strokeRect(boardX + x*cellPx + 0.5, boardY + y*cellPx + 0.5, cellPx-1, cellPx-1);
+    const p = state.active;
+    let gy = p.y;
+    while (canPlace(state.board, {...p, y: gy+1})) gy++;
+    const ghost = {...p, y: gy};
+    if (gy !== p.y){
+      ctx.globalAlpha = 0.22;
+      for (const [r,c] of pieceCells(ghost)){
+        if (r>=0) drawCell(c*cellPx, r*cellPx, COLORS[p.kind]);
       }
+      ctx.globalAlpha = 1;
     }
-    // active
-    for (const [x,y] of pieceCells(state.active)){
-      if (y >= 0){
-        drawCell(ctx, boardX + x*cellPx, boardY + y*cellPx, COLORS[state.active.kind], cellPx);
-      }
+    for (const [r,c] of pieceCells(p)){
+      if (r>=0) drawCell(c*cellPx, r*cellPx, COLORS[p.kind]);
     }
-  }
-
-  // border around board
-  ctx.strokeStyle = "#1e2536";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(boardX-1, boardY-1, COLS*cellPx+2, ROWS*cellPx+2);
-
-  // HUD
-  const hudX = portraitHud ? 2 : (boardX + COLS*cellPx + 14);
-  const hudY = portraitHud ? 2 : boardY;
-  const fSize = Math.max(11, Math.round(cellPx*0.5));
-  ctx.fillStyle = "#cbd3e6";
-  ctx.font = `${fSize}px -apple-system, "Segoe UI", Roboto, sans-serif`;
-  ctx.textBaseline = "top";
-
-  ctx.fillStyle = "#7d869d"; ctx.fillText("SCORE", hudX, hudY);
-  ctx.fillStyle = "#f3f6ff"; ctx.font = `bold ${Math.round(fSize*1.3)}px monospace`;
-  ctx.fillText(String(state.score).padStart(6,"0"), hudX, hudY + fSize + 2);
-
-  let yc = hudY + fSize + Math.round(fSize*1.3) + 14;
-  ctx.font = `${fSize}px -apple-system, sans-serif`;
-  ctx.fillStyle = "#7d869d"; ctx.fillText("LINES", hudX, yc);
-  ctx.fillStyle = "#f3f6ff"; ctx.font = `bold ${Math.round(fSize*1.2)}px monospace`;
-  ctx.fillText(String(state.lines), hudX, yc + fSize + 2);
-
-  yc += fSize + Math.round(fSize*1.2) + 12;
-  ctx.font = `${fSize}px -apple-system, sans-serif`;
-  ctx.fillStyle = "#7d869d"; ctx.fillText("LEVEL", hudX, yc);
-  ctx.fillStyle = "#f3f6ff"; ctx.font = `bold ${Math.round(fSize*1.2)}px monospace`;
-  ctx.fillText(String(state.level), hudX, yc + fSize + 2);
-
-  yc += fSize + Math.round(fSize*1.2) + 12;
-  ctx.font = `${fSize}px -apple-system, sans-serif`;
-  ctx.fillStyle = "#7d869d"; ctx.fillText("BEST", hudX, yc);
-  ctx.fillStyle = "#f3f6ff"; ctx.font = `bold ${Math.round(fSize*1.1)}px monospace`;
-  const bestStr = state.best == null ? "—" : String(state.best);
-  ctx.fillText(bestStr, hudX, yc + fSize + 2);
-
-  yc += fSize + Math.round(fSize*1.1) + 14;
-  ctx.font = `${fSize}px -apple-system, sans-serif`;
-  ctx.fillStyle = "#7d869d"; ctx.fillText("NEXT", hudX, yc);
-  // next piece preview
-  if (state.nextKind){
-    const pcells = SHAPES[state.nextKind][0];
-    const previewCell = Math.round(cellPx * 0.7);
-    const px0 = hudX;
-    const py0 = yc + fSize + 6;
-    // background
-    ctx.fillStyle = "#06080d";
-    ctx.fillRect(px0, py0, previewCell*4 + 4, previewCell*3 + 4);
-    for (const [dx,dy] of pcells){
-      drawCell(ctx, px0 + 2 + dx*previewCell, py0 + 2 + dy*previewCell, COLORS[state.nextKind], previewCell);
-    }
-  }
-
-  // overlays
-  if (state.status === "title" || state.status === "paused" || state.status === "gameover"){
-    ctx.fillStyle = "rgba(0,0,0,0.72)";
-    ctx.fillRect(boardX, boardY, COLS*cellPx, ROWS*cellPx);
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#f3f6ff";
-    const cx = boardX + COLS*cellPx/2;
-    const cy = boardY + ROWS*cellPx/2;
-    if (state.status === "title"){
-      ctx.font = `bold ${Math.round(cellPx*1.3)}px -apple-system, sans-serif`;
-      ctx.fillText("TETRIS", cx, cy - cellPx*2);
-      ctx.font = `${Math.round(cellPx*0.55)}px -apple-system, sans-serif`;
-      ctx.fillStyle = "#cbd3e6";
-      ctx.fillText("press any key", cx, cy - cellPx*0.3);
-      ctx.fillText("to start", cx, cy + cellPx*0.4);
-      ctx.font = `${Math.round(cellPx*0.45)}px -apple-system, sans-serif`;
-      ctx.fillStyle = "#7d869d";
-      ctx.fillText("Best: " + (state.best == null ? "—" : state.best), cx, cy + cellPx*1.7);
-    } else if (state.status === "paused"){
-      ctx.font = `bold ${Math.round(cellPx*1.1)}px -apple-system, sans-serif`;
-      ctx.fillText("PAUSED", cx, cy - cellPx*0.5);
-      ctx.font = `${Math.round(cellPx*0.5)}px -apple-system, sans-serif`;
-      ctx.fillStyle = "#cbd3e6";
-      ctx.fillText("P to resume · R to title", cx, cy + cellPx*0.6);
-    } else if (state.status === "gameover"){
-      ctx.font = `bold ${Math.round(cellPx*1.0)}px -apple-system, sans-serif`;
-      ctx.fillText("GAME OVER", cx, cy - cellPx*1.5);
-      ctx.font = `${Math.round(cellPx*0.6)}px monospace`;
-      ctx.fillStyle = "#f3f6ff";
-      ctx.fillText("Score: " + state.score, cx, cy - cellPx*0.2);
-      if (state.best != null){
-        ctx.font = `${Math.round(cellPx*0.5)}px monospace`;
-        ctx.fillStyle = "#cbd3e6";
-        ctx.fillText("Best: " + state.best, cx, cy + cellPx*0.6);
-      }
-      ctx.font = `${Math.round(cellPx*0.5)}px -apple-system, sans-serif`;
-      ctx.fillStyle = "#7d869d";
-      ctx.fillText("press R to restart", cx, cy + cellPx*1.7);
-    }
-    ctx.textAlign = "start";
   }
 }
 
-// ---------- Main loop ----------
-let acc = 0, last = performance.now();
-function frame(now){
-  acc += now - last;
-  last = now;
-  // cap accumulator to avoid spiral of death
-  if (acc > 250) acc = 250;
-  while (acc >= STEP_MS){
-    input.tickHeldKeys(now);
-    let intents = input.drain();
-    if (input.isSoftDropHeld()) intents.push("SoftDropHeld");
-    if (state.status === "playing"){
-      step(intents);
-    } else {
-      // drop intents that arrived in non-playing states (already filtered in keydown)
+function drawHUD(state){
+  const x0 = COLS*cellPx + 8;
+  ctx.fillStyle = '#0b0f1a';
+  ctx.fillRect(x0, 0, hudW, ROWS*cellPx);
+  ctx.fillStyle = '#dfe7f5';
+  ctx.textBaseline = 'top';
+  const pad = 10;
+  const fs = Math.max(11, Math.floor(cellPx*0.42));
+  ctx.font = `${fs}px ui-monospace,monospace`;
+  let y = pad;
+  function label(s, v){
+    ctx.fillStyle = '#7a8aa6';
+    ctx.fillText(s, x0+pad, y);
+    y += fs + 2;
+    ctx.fillStyle = '#dfe7f5';
+    ctx.fillText(v, x0+pad, y);
+    y += fs + 10;
+  }
+  label('SCORE', String(state.score));
+  label('LINES', String(state.lines));
+  label('LEVEL', String(state.level));
+  label('BEST', state.best===null ? '—' : String(state.best));
+  // next preview
+  ctx.fillStyle = '#7a8aa6';
+  ctx.fillText('NEXT', x0+pad, y);
+  y += fs + 6;
+  if (state.next){
+    const cells = SHAPES[state.next][0];
+    const minR = Math.min(...cells.map(c=>c[0]));
+    const minC = Math.min(...cells.map(c=>c[1]));
+    const maxR = Math.max(...cells.map(c=>c[0]));
+    const maxC = Math.max(...cells.map(c=>c[1]));
+    const w = (maxC-minC+1), h = (maxR-minR+1);
+    const sz = Math.min(Math.floor((hudW - pad*2) / 4), Math.floor(cellPx*0.7));
+    const ox = x0 + pad + Math.floor((hudW - pad*2 - w*sz)/2);
+    const oy = y;
+    ctx.fillStyle = '#05070b';
+    ctx.fillRect(x0+pad, y-2, hudW-pad*2, sz*3 + 8);
+    for (const [r,c] of cells){
+      const cx = ox + (c-minC)*sz;
+      const cy = oy + (r-minR)*sz;
+      ctx.fillStyle = COLORS[state.next];
+      ctx.fillRect(cx, cy, sz, sz);
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.strokeRect(cx+0.5, cy+0.5, sz-1, sz-1);
     }
+  }
+}
+
+function drawOverlay(state){
+  const w = COLS*cellPx, h = ROWS*cellPx;
+  if (state.status === 'title' || state.status === 'paused' || state.status === 'gameover'){
+    ctx.fillStyle = 'rgba(0,0,0,0.72)';
+    ctx.fillRect(0,0,w,h);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    const big = Math.max(20, Math.floor(cellPx*1.0));
+    const sml = Math.max(11, Math.floor(cellPx*0.42));
+    if (state.status === 'title'){
+      ctx.font = `bold ${big}px ui-monospace,monospace`;
+      ctx.fillText('p50 TETRIS', w/2, h/2 - big);
+      ctx.font = `${sml}px ui-monospace,monospace`;
+      ctx.fillStyle = '#dfe7f5';
+      ctx.fillText('Press any key to start', w/2, h/2);
+      ctx.fillStyle = '#7a8aa6';
+      ctx.fillText('Best: ' + (state.best===null ? '—' : state.best), w/2, h/2 + sml + 8);
+    } else if (state.status === 'paused'){
+      ctx.font = `bold ${big}px ui-monospace,monospace`;
+      ctx.fillText('Paused', w/2, h/2 - sml);
+      ctx.font = `${sml}px ui-monospace,monospace`;
+      ctx.fillStyle = '#dfe7f5';
+      ctx.fillText('P to resume · R to quit', w/2, h/2 + big*0.4);
+    } else { // gameover
+      ctx.font = `bold ${big}px ui-monospace,monospace`;
+      ctx.fillStyle = '#ff8a8a';
+      ctx.fillText('Game Over', w/2, h/2 - big);
+      ctx.font = `${sml}px ui-monospace,monospace`;
+      ctx.fillStyle = '#dfe7f5';
+      ctx.fillText('Score: ' + state.score, w/2, h/2);
+      ctx.fillStyle = '#7a8aa6';
+      ctx.fillText('Press R to restart', w/2, h/2 + sml + 8);
+    }
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'top';
+  }
+}
+
+function render(state){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawBoard(state);
+  drawHUD(state);
+  drawOverlay(state);
+}
+
+// ---------- bootstrap ----------
+const state = newGame();
+
+window.addEventListener('keydown', (e) => {
+  Audio.ensure();
+  InputCtl.onKeyDown(e);
+});
+window.addEventListener('keyup', InputCtl.onKeyUp);
+window.addEventListener('blur', () => { InputCtl.reset(); });
+
+// touch buttons
+function bindBtn(id, intent){
+  const el = document.getElementById(id);
+  const fire = (e) => { e.preventDefault(); Audio.ensure(); InputCtl.push(intent); };
+  el.addEventListener('touchstart', fire, {passive:false});
+  el.addEventListener('mousedown', fire);
+}
+bindBtn('bL','MoveLeft');
+bindBtn('bR','MoveRight');
+bindBtn('bR_rot','RotateCW');
+bindBtn('bD','HardDrop');
+
+// also allow tap anywhere on canvas in title/gameover to start
+canvas.addEventListener('touchstart', (e) => {
+  Audio.ensure();
+  if (state.status === 'title'){ e.preventDefault(); InputCtl.push('Any'); }
+  else if (state.status === 'gameover'){ e.preventDefault(); InputCtl.push('Restart'); }
+}, {passive:false});
+canvas.addEventListener('mousedown', () => {
+  Audio.ensure();
+  if (state.status === 'title'){ InputCtl.push('Any'); }
+  else if (state.status === 'gameover'){ InputCtl.push('Restart'); }
+});
+
+// resize: auto-pause if playing
+function onResize(){
+  computeLayout();
+  if (state.status === 'playing'){ state.status = 'paused'; InputCtl.reset(); }
+}
+window.addEventListener('resize', onResize);
+window.addEventListener('orientationchange', onResize);
+
+computeLayout();
+
+// fixed-timestep loop
+let acc = 0;
+let last = performance.now();
+function frame(now){
+  let delta = now - last; last = now;
+  if (delta > 250) delta = 250;
+  acc += delta;
+  while (acc >= STEP_MS){
+    InputCtl.tick(STEP_MS);
+    const intents = InputCtl.drain();
+    step(state, intents);
     acc -= STEP_MS;
   }
-  render();
+  render(state);
   requestAnimationFrame(frame);
 }
-
-resizeCanvas();
-requestAnimationFrame((t)=>{ last = t; requestAnimationFrame(frame); });
+requestAnimationFrame(frame);
 
 })();
 </script>
